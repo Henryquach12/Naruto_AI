@@ -6,41 +6,33 @@ from energy_ball import EnergyBall
 
 
 WINDOW_TITLE        = "Naruto AI Vision — Rasengan"
-BALL_BASE_SIZE      = 0.55   # individual ball radius = hand_size * this
-FADE_FRAMES         = 20     # frames to fade out after hand disappears
+BALL_BASE_SIZE      = 0.55
+FADE_FRAMES         = 20
 MAX_HANDS           = 2
-
-# ── combine settings ─────────────────────────────────────────────────────────
-COMBINE_DIST_FACTOR = 0.80   # combine when palm-dist < factor*(s0+s1)
-COMBINE_GROWTH_RATE = 1.8    # pixels per frame the combined ball grows
-COMBINE_MAX_RADIUS  = 240    # hard cap on combined ball size
-COMBINE_START_MULT  = 1.10   # combined ball starts at this * avg-individual-radius
+COMBINE_DIST_FACTOR = 1.20   # combine when palm-dist < factor*(s0+s1)
+COMBINE_GROWTH_RATE = 1.8    # px/frame growth
+COMBINE_MAX_RADIUS  = 240
 
 
 def blend(frame, layer, alpha):
     frame[:] = cv2.addWeighted(layer, alpha, frame, 1.0 - alpha, 0)
 
 
-def draw_hud(frame, fps, hand_count, state_label):
+def draw_hud(frame, fps, hand_count, msg):
     h, w = frame.shape[:2]
     bar  = frame.copy()
-    cv2.rectangle(bar, (0, 0), (w, 44), (20, 20, 20), -1)
-    blend(frame, bar, 0.55)
-
-    cv2.putText(frame, f"FPS {fps:.1f}",
-                (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 230, 180), 2, cv2.LINE_AA)
-    cv2.putText(frame, f"Hands: {hand_count}",
-                (200, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 220, 80), 2, cv2.LINE_AA)
-    cv2.putText(frame, state_label,
-                (w - 420, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (80, 200, 255), 2, cv2.LINE_AA)
+    cv2.rectangle(bar, (0, 0), (w, 48), (20, 20, 20), -1)
+    blend(frame, bar, 0.60)
+    cv2.putText(frame, f"FPS {fps:.1f}  |  Hands: {hand_count}  |  {msg}",
+                (12, 33), cv2.FONT_HERSHEY_SIMPLEX, 0.75, (0, 230, 180), 2, cv2.LINE_AA)
 
 
-def draw_combine_beam(frame, c0, c1):
-    """Draw a glowing beam connecting the two palms during combination."""
+def draw_combine_beam(frame, c0, c1, progress):
+    """Glowing beam between palms; progress 0-1 controls brightness."""
     layer = frame.copy()
-    cv2.line(layer, c0, c1, (255, 220, 80), 6, cv2.LINE_AA)
+    cv2.line(layer, c0, c1, (255, 220, 80), 8, cv2.LINE_AA)
     cv2.line(layer, c0, c1, (255, 255, 255), 2, cv2.LINE_AA)
-    blend(frame, layer, 0.60)
+    blend(frame, layer, 0.5 + 0.4 * progress)
 
 
 def main():
@@ -54,11 +46,7 @@ def main():
 
     detector = HandDetector(max_hands=MAX_HANDS)
 
-    # Per-hand balls + fade counters
-    hand_balls  = [EnergyBall() for _ in range(MAX_HANDS)]
-    fade_cnt    = [0] * MAX_HANDS
-
-    # Combined ball state
+    hand_balls      = [EnergyBall() for _ in range(MAX_HANDS)]
     combined_ball   = EnergyBall()
     combined        = False
     combined_radius = 0.0
@@ -75,29 +63,28 @@ def main():
             break
 
         frame   = cv2.flip(frame, 1)
-        h, w    = frame.shape[:2]
         frame_n += 1
 
         _, hand_list = detector.find_hands(frame)
         detector.draw_landmarks(frame, hand_list)
 
-        state_label = "Raise your hand!"
+        n = len(hand_list)
 
-        # ── debug console every 30 frames ─────────────────────────────────────
+        # ── console debug every 30 frames ─────────────────────────────────────
         if frame_n % 30 == 0:
             if hand_list:
                 for idx, lm in enumerate(hand_list):
-                    wrist_y = lm[0][1]
-                    palm    = detector.get_palm_center(lm)
-                    size    = detector.get_hand_size(lm)
-                    print(f"[f{frame_n}] hand{idx}: wrist_y={wrist_y}/{h} "
-                          f"palm={palm}  size={size:.1f}  "
-                          f"r={max(30, int(size * BALL_BASE_SIZE))}")
+                    c  = detector.get_palm_center(lm)
+                    sz = detector.get_hand_size(lm)
+                    print(f"[f{frame_n}] hand{idx}  palm={c}  size={sz:.1f}  "
+                          f"r={max(30, int(sz * BALL_BASE_SIZE))}")
             else:
-                print(f"[f{frame_n}] no hands detected")
+                print(f"[f{frame_n}] NO hands detected")
 
-        # ── two-hand logic ─────────────────────────────────────────────────────
-        if len(hand_list) == 2:
+        msg = ""
+
+        # ── two hands ─────────────────────────────────────────────────────────
+        if n >= 2:
             lm0, lm1  = hand_list[0], hand_list[1]
             c0        = detector.get_palm_center(lm0)
             c1        = detector.get_palm_center(lm1)
@@ -107,66 +94,57 @@ def main():
             threshold = (s0 + s1) * COMBINE_DIST_FACTOR
 
             if dist < threshold:
-                # ── COMBINED mode ──────────────────────────────────────────────
+                # ── COMBINED ──────────────────────────────────────────────────
                 if not combined:
                     r0 = max(30, int(s0 * BALL_BASE_SIZE))
                     r1 = max(30, int(s1 * BALL_BASE_SIZE))
-                    combined_radius = ((r0 + r1) / 2) * COMBINE_START_MULT
-                    combined        = True
+                    combined_radius = float((r0 + r1) / 2 * 1.10)
+                    combined = True
 
                 combined_radius = min(combined_radius + COMBINE_GROWTH_RATE,
                                       COMBINE_MAX_RADIUS)
+                power  = 1.0 + (combined_radius - 60) / 80.0
+                cx     = (c0[0] + c1[0]) // 2
+                cy     = (c0[1] + c1[1]) // 2
+                progress = min(1.0, (combined_radius - 60) / 120.0)
 
-                cx = (c0[0] + c1[0]) // 2
-                cy = (c0[1] + c1[1]) // 2
-
-                # power increases as ball grows
-                power = 1.0 + (combined_radius - 60) / 80.0
-
-                draw_combine_beam(frame, c0, c1)
+                draw_combine_beam(frame, c0, c1, progress)
                 combined_ball.draw(frame, (cx, cy), int(combined_radius), power=power)
-
-                fade_cnt = [0, 0]
-                state_label = f"COMBINED! r={int(combined_radius)} pwr={power:.1f}"
-
+                msg = f"COMBINED!  r={int(combined_radius)}  pwr={power:.1f}"
             else:
-                # ── SEPARATE — two individual balls ───────────────────────────
+                # ── SEPARATE — two independent balls ──────────────────────────
                 combined        = False
                 combined_radius = 0.0
-
-                for i, lm in enumerate(hand_list[:MAX_HANDS]):
-                    fade_cnt[i] = 0
+                for i in range(2):
+                    lm     = hand_list[i]
                     center = detector.get_palm_center(lm)
                     size   = detector.get_hand_size(lm)
                     radius = max(30, int(size * BALL_BASE_SIZE))
                     hand_balls[i].draw(frame, center, radius, power=1.0)
+                msg = f"2 hands  dist={int(dist)}  threshold={int(threshold)}  (bring closer!)"
 
-                state_label = "Bring hands together!"
-
-        elif len(hand_list) == 1:
-            # ── single hand ───────────────────────────────────────────────────
+        # ── one hand ──────────────────────────────────────────────────────────
+        elif n == 1:
             combined        = False
             combined_radius = 0.0
-            fade_cnt[1]     = 0
-
             lm     = hand_list[0]
             center = detector.get_palm_center(lm)
             size   = detector.get_hand_size(lm)
             radius = max(30, int(size * BALL_BASE_SIZE))
             hand_balls[0].draw(frame, center, radius, power=1.0)
-            fade_cnt[0] = 0
-            state_label = "RASENGAN!"
+            msg = "RASENGAN!"
 
+        # ── no hands ──────────────────────────────────────────────────────────
         else:
-            # ── no hands ──────────────────────────────────────────────────────
             combined        = False
             combined_radius = 0.0
+            msg = "Raise your hand!"
 
         now       = time.time()
         fps       = 1.0 / max(now - prev_time, 1e-6)
         prev_time = now
 
-        draw_hud(frame, fps, len(hand_list), state_label)
+        draw_hud(frame, fps, n, msg)
         cv2.imshow(WINDOW_TITLE, frame)
 
         if cv2.waitKey(1) & 0xFF in (ord("q"), 27):
