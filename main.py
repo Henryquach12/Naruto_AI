@@ -169,7 +169,9 @@ def main():
         draw_hud(frame, fps, n, msg)
         cv2.imshow(WINDOW_TITLE, frame)
 
-        if cv2.waitKey(1) & 0xFF in (ord("q"), 27):
+        key = cv2.waitKey(1) & 0xFF
+        window_open = cv2.getWindowProperty(WINDOW_TITLE, cv2.WND_PROP_VISIBLE) >= 1
+        if not window_open or key in (ord("q"), 27):
             break
 
     cap.release()
