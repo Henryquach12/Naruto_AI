@@ -12,7 +12,7 @@ class HandDetector:
     )
     _MODEL_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "hand_landmarker.task")
 
-    def __init__(self, max_hands=2, detection_confidence=0.5, tracking_confidence=0.5):
+    def __init__(self, max_hands=4, detection_confidence=0.5, tracking_confidence=0.5):
         self._ensure_model()
 
         # IMAGE mode re-detects every frame — most reliable for multi-hand

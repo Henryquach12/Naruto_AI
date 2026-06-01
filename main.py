@@ -7,10 +7,9 @@ from energy_ball import EnergyBall
 
 WINDOW_TITLE        = "Naruto AI Vision — Rasengan"
 BALL_BASE_SIZE      = 0.55
-FADE_FRAMES         = 20
-MAX_HANDS           = 2
-COMBINE_DIST_FACTOR = 1.20   # combine when palm-dist < factor*(s0+s1)
-COMBINE_GROWTH_RATE = 1.8    # px/frame growth
+MAX_HANDS           = 6      # MediaPipe handles up to ~6 reliably
+COMBINE_DIST_FACTOR = 1.20   # combine when dist < factor * (s_i + s_j)
+COMBINE_GROWTH_RATE = 1.8    # px/frame
 COMBINE_MAX_RADIUS  = 240
 
 
@@ -18,9 +17,36 @@ def blend(frame, layer, alpha):
     frame[:] = cv2.addWeighted(layer, alpha, frame, 1.0 - alpha, 0)
 
 
+def greedy_pairs(centers, sizes):
+    """
+    Find non-overlapping pairs of hands that are close enough to combine.
+    Returns (list of (i,j) pairs, list of unpaired indices).
+    """
+    n = len(centers)
+    candidates = []
+    for i in range(n):
+        for j in range(i + 1, n):
+            dist      = float(np.linalg.norm(np.array(centers[i]) - np.array(centers[j])))
+            threshold = (sizes[i] + sizes[j]) * COMBINE_DIST_FACTOR
+            if dist < threshold:
+                candidates.append((dist, i, j))
+    candidates.sort()
+
+    used   = set()
+    pairs  = []
+    for _, i, j in candidates:
+        if i not in used and j not in used:
+            pairs.append((i, j))
+            used.add(i)
+            used.add(j)
+
+    unmatched = [i for i in range(n) if i not in used]
+    return pairs, unmatched
+
+
 def draw_hud(frame, fps, hand_count, msg):
-    h, w = frame.shape[:2]
-    bar  = frame.copy()
+    w   = frame.shape[1]
+    bar = frame.copy()
     cv2.rectangle(bar, (0, 0), (w, 48), (20, 20, 20), -1)
     blend(frame, bar, 0.60)
     cv2.putText(frame, f"FPS {fps:.1f}  |  Hands: {hand_count}  |  {msg}",
@@ -28,7 +54,6 @@ def draw_hud(frame, fps, hand_count, msg):
 
 
 def draw_combine_beam(frame, c0, c1, progress):
-    """Glowing beam between palms; progress 0-1 controls brightness."""
     layer = frame.copy()
     cv2.line(layer, c0, c1, (255, 220, 80), 8, cv2.LINE_AA)
     cv2.line(layer, c0, c1, (255, 255, 255), 2, cv2.LINE_AA)
@@ -44,12 +69,12 @@ def main():
     cap.set(cv2.CAP_PROP_FRAME_WIDTH,  1280)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
 
-    detector = HandDetector(max_hands=MAX_HANDS)
+    detector   = HandDetector(max_hands=MAX_HANDS)
+    hand_balls = [EnergyBall() for _ in range(MAX_HANDS)]
 
-    hand_balls      = [EnergyBall() for _ in range(MAX_HANDS)]
-    combined_ball   = EnergyBall()
-    combined        = False
-    combined_radius = 0.0
+    # Combined state: keyed by frozenset{i, j}
+    # Each entry: {"ball": EnergyBall, "radius": float}
+    combined_states: dict = {}
 
     prev_time = time.time()
     frame_n   = 0
@@ -66,8 +91,11 @@ def main():
         frame_n += 1
 
         _, hand_list = detector.find_hands(frame)
-        detector.draw_landmarks(frame, hand_list)
 
+        # Sort left-to-right for stable per-frame indexing
+        hand_list.sort(key=lambda lm: detector.get_palm_center(lm)[0])
+
+        detector.draw_landmarks(frame, hand_list)
         n = len(hand_list)
 
         # ── console debug every 30 frames ─────────────────────────────────────
@@ -76,69 +104,62 @@ def main():
                 for idx, lm in enumerate(hand_list):
                     c  = detector.get_palm_center(lm)
                     sz = detector.get_hand_size(lm)
-                    print(f"[f{frame_n}] hand{idx}  palm={c}  size={sz:.1f}  "
-                          f"r={max(30, int(sz * BALL_BASE_SIZE))}")
+                    print(f"[f{frame_n}] hand{idx} palm={c} size={sz:.1f}")
             else:
                 print(f"[f{frame_n}] NO hands detected")
 
-        msg = ""
+        msg = "Raise your hand!"
 
-        # ── two hands ─────────────────────────────────────────────────────────
-        if n >= 2:
-            lm0, lm1  = hand_list[0], hand_list[1]
-            c0        = detector.get_palm_center(lm0)
-            c1        = detector.get_palm_center(lm1)
-            s0        = detector.get_hand_size(lm0)
-            s1        = detector.get_hand_size(lm1)
-            dist      = float(np.linalg.norm(np.array(c0) - np.array(c1)))
-            threshold = (s0 + s1) * COMBINE_DIST_FACTOR
+        if n > 0:
+            centers = [detector.get_palm_center(lm) for lm in hand_list]
+            sizes   = [detector.get_hand_size(lm)   for lm in hand_list]
 
-            if dist < threshold:
-                # ── COMBINED ──────────────────────────────────────────────────
-                if not combined:
-                    r0 = max(30, int(s0 * BALL_BASE_SIZE))
-                    r1 = max(30, int(s1 * BALL_BASE_SIZE))
-                    combined_radius = float((r0 + r1) / 2 * 1.10)
-                    combined = True
+            pairs, unmatched = greedy_pairs(centers, sizes)
 
-                combined_radius = min(combined_radius + COMBINE_GROWTH_RATE,
+            # Expire combined states whose pair no longer exists
+            active_keys = {frozenset(p) for p in pairs}
+            for key in list(combined_states):
+                if key not in active_keys:
+                    del combined_states[key]
+
+            # ── draw combined balls ────────────────────────────────────────────
+            for i, j in pairs:
+                key = frozenset({i, j})
+                if key not in combined_states:
+                    r0 = max(30, int(sizes[i] * BALL_BASE_SIZE))
+                    r1 = max(30, int(sizes[j] * BALL_BASE_SIZE))
+                    combined_states[key] = {
+                        "ball":   EnergyBall(),
+                        "radius": float((r0 + r1) / 2 * 1.10),
+                    }
+
+                state           = combined_states[key]
+                state["radius"] = min(state["radius"] + COMBINE_GROWTH_RATE,
                                       COMBINE_MAX_RADIUS)
-                power  = 1.0 + (combined_radius - 60) / 80.0
-                cx     = (c0[0] + c1[0]) // 2
-                cy     = (c0[1] + c1[1]) // 2
-                progress = min(1.0, (combined_radius - 60) / 120.0)
 
-                draw_combine_beam(frame, c0, c1, progress)
-                combined_ball.draw(frame, (cx, cy), int(combined_radius), power=power)
-                msg = f"COMBINED!  r={int(combined_radius)}  pwr={power:.1f}"
-            else:
-                # ── SEPARATE — two independent balls ──────────────────────────
-                combined        = False
-                combined_radius = 0.0
-                for i in range(2):
-                    lm     = hand_list[i]
-                    center = detector.get_palm_center(lm)
-                    size   = detector.get_hand_size(lm)
-                    radius = max(30, int(size * BALL_BASE_SIZE))
-                    hand_balls[i].draw(frame, center, radius, power=1.0)
-                msg = f"2 hands  dist={int(dist)}  threshold={int(threshold)}  (bring closer!)"
+                power    = 1.0 + (state["radius"] - 60) / 80.0
+                cx       = (centers[i][0] + centers[j][0]) // 2
+                cy       = (centers[i][1] + centers[j][1]) // 2
+                progress = min(1.0, (state["radius"] - 60) / 120.0)
 
-        # ── one hand ──────────────────────────────────────────────────────────
-        elif n == 1:
-            combined        = False
-            combined_radius = 0.0
-            lm     = hand_list[0]
-            center = detector.get_palm_center(lm)
-            size   = detector.get_hand_size(lm)
-            radius = max(30, int(size * BALL_BASE_SIZE))
-            hand_balls[0].draw(frame, center, radius, power=1.0)
-            msg = "RASENGAN!"
+                draw_combine_beam(frame, centers[i], centers[j], progress)
+                state["ball"].draw(frame, (cx, cy), int(state["radius"]), power=power)
 
-        # ── no hands ──────────────────────────────────────────────────────────
+            # ── draw individual balls for unmatched hands ──────────────────────
+            for i in unmatched:
+                radius = max(30, int(sizes[i] * BALL_BASE_SIZE))
+                hand_balls[i % MAX_HANDS].draw(frame, centers[i], radius, power=1.0)
+
+            # ── status message ─────────────────────────────────────────────────
+            parts = []
+            if pairs:
+                parts.append(f"COMBINED x{len(pairs)}")
+            if unmatched:
+                parts.append(f"RASENGAN x{len(unmatched)}")
+            msg = "  +  ".join(parts) if parts else "RASENGAN!"
+
         else:
-            combined        = False
-            combined_radius = 0.0
-            msg = "Raise your hand!"
+            combined_states.clear()
 
         now       = time.time()
         fps       = 1.0 / max(now - prev_time, 1e-6)
