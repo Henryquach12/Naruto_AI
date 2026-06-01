@@ -95,6 +95,51 @@ class EnergyBall:
             cv2.line(frame, (x1, y1), (x2, y2), self.SPARK_COLOR,
                      max(1, int(1 + p["length"])), cv2.LINE_AA)
 
+    def _draw_smoke_haze(self, frame, cx, cy, radius):
+        """Diffuse misty fog that surrounds the ball before the ribbons."""
+        for scale, alpha in [(3.0, 0.06), (2.4, 0.09), (1.8, 0.13)]:
+            layer = frame.copy()
+            cv2.circle(layer, (cx, cy), max(1, int(radius * scale)),
+                       (210, 230, 255), -1)
+            _blend(frame, layer, alpha)
+
+    def _draw_smoke_ribbons(self, frame, cx, cy, radius, speed_mult):
+        """
+        Rotating white wind/chakra ribbons that envelop the ball,
+        matching the Rasengan's outer smoke layer.
+        Each ribbon is a semi-transparent rotated ellipse crossing the ball center.
+        """
+        # ── primary ribbons (long, bright, forward rotation) ──────────────────
+        n_primary = 6
+        for i in range(n_primary):
+            ang_deg = (self.tick * 2.8 * speed_mult + 60.0 * i) % 360
+            a       = max(1, int(radius * 1.55))   # semi-major: extends well beyond ball
+            b       = max(1, int(radius * 0.15))   # semi-minor: thin ribbon
+
+            # soft halo layer behind each ribbon
+            layer = frame.copy()
+            cv2.ellipse(layer, (cx, cy),
+                        (max(1, int(a * 1.18)), max(1, int(b * 2.4))),
+                        ang_deg, 0, 360, (200, 225, 255), -1, cv2.LINE_AA)
+            _blend(frame, layer, 0.10)
+
+            # bright ribbon core
+            layer = frame.copy()
+            cv2.ellipse(layer, (cx, cy), (a, b),
+                        ang_deg, 0, 360, (255, 255, 255), -1, cv2.LINE_AA)
+            _blend(frame, layer, 0.32)
+
+        # ── secondary counter-rotating thinner ribbons ─────────────────────────
+        n_secondary = 4
+        for i in range(n_secondary):
+            ang_deg = (-self.tick * 2.0 * speed_mult + 45.0 * i) % 360
+            a       = max(1, int(radius * 1.05))
+            b       = max(1, int(radius * 0.08))
+            layer   = frame.copy()
+            cv2.ellipse(layer, (cx, cy), (a, b),
+                        ang_deg, 0, 360, (235, 245, 255), -1, cv2.LINE_AA)
+            _blend(frame, layer, 0.20)
+
     def _draw_outer_ring(self, frame, cx, cy, radius, speed_mult):
         segments = 24
         rot = self.tick * 0.03 * speed_mult
@@ -138,30 +183,36 @@ class EnergyBall:
         self._draw_glow(frame, cx, cy, r, self.MID_COLOR,   0.40 + glow_boost, 1.55)
         self._draw_glow(frame, cx, cy, r, self.INNER_COLOR, 0.45 + glow_boost, 1.20)
 
-        # 3. rotating outer ring
+        # 3. smoke haze (misty atmosphere behind everything)
+        self._draw_smoke_haze(frame, cx, cy, r)
+
+        # 4. rotating outer ring
         self._draw_outer_ring(frame, cx, cy, r, speed_mult)
 
-        # 4. spiral particles
+        # 5. spiral particles
         self._draw_spiral_particles(frame, cx, cy, r, speed_mult)
 
-        # 5. spark streaks
+        # 6. spark streaks
         self._draw_spark_streaks(frame, cx, cy, r, speed_mult)
 
-        # 6. main ball body
+        # 7. main ball body
         ball_layer = frame.copy()
         cv2.circle(ball_layer, (cx, cy), r, self.MID_COLOR, -1)
         _blend(frame, ball_layer, 0.70)
 
-        # 7. inner ring + core (solid draws, always visible)
+        # 8. smoke ribbons — over the ball, enveloping it
+        self._draw_smoke_ribbons(frame, cx, cy, r, speed_mult)
+
+        # 9. inner ring + core (solid, punches through the smoke)
         cv2.circle(frame, (cx, cy), max(1, int(r * 0.70)), self.INNER_COLOR, -1)
         cv2.circle(frame, (cx, cy), max(1, int(r * 0.35)), self.CORE_COLOR,  -1)
 
-        # 8. specular highlight
+        # 10. specular highlight
         cv2.circle(frame,
                    (cx - int(r * 0.22), cy - int(r * 0.22)),
                    max(1, int(r * 0.15)), (255, 255, 255), -1)
 
-        # 9. edge rim
+        # 11. edge rim
         cv2.circle(frame, (cx, cy), r, self.INNER_COLOR, 2, cv2.LINE_AA)
 
         return frame
