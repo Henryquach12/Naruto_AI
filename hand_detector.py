@@ -48,9 +48,9 @@ class HandDetector:
 
         return frame, hand_list
 
-    def is_hand_raised(self, landmarks, frame_height):
-        """True when wrist is in the upper 60% of the frame."""
-        return landmarks[0][1] < frame_height * 0.6
+    def is_hand_raised(self, landmarks, frame_height, thresh=0.80):
+        """True when wrist is above `thresh` fraction down the frame."""
+        return landmarks[0][1] < frame_height * thresh
 
     def get_palm_center(self, landmarks):
         """Pixel (x, y) of the palm center."""
