@@ -33,12 +33,17 @@ class HandDetector:
             print("Model ready.")
 
     def find_hands(self, frame):
-        """Detect hands in frame. Returns (frame, list_of_landmark_lists)."""
-        rgb      = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        """Detect hands in frame. Returns (frame, list_of_landmark_lists).
+
+        Detects on a half-resolution copy for speed; landmarks are normalised
+        (0-1) so they map back to the full-resolution frame correctly.
+        """
+        h, w  = frame.shape[:2]
+        small = cv2.resize(frame, (w // 2, h // 2), interpolation=cv2.INTER_AREA)
+        rgb   = cv2.cvtColor(small, cv2.COLOR_BGR2RGB)
         mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
         results  = self._detector.detect(mp_image)
 
-        h, w     = frame.shape[:2]
         hand_list = []
         if results.hand_landmarks:
             for hand_lms in results.hand_landmarks:
