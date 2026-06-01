@@ -57,6 +57,28 @@ class HandDetector:
         ys = [landmarks[i][1] for i in [0, 5, 9, 13, 17]]
         return (int(np.mean(xs)), int(np.mean(ys)))
 
+    def is_palm_facing_camera(self, landmarks):
+        """
+        True when the palm side (not the back) of the hand faces the camera.
+
+        Uses the 2D cross product of two vectors rooted at the wrist:
+          v1 = index MCP (5) - wrist (0)
+          v2 = pinky MCP (17) - wrist (0)
+        In the horizontally-mirrored display frame, cross_z < 0 means the
+        palm is facing the viewer; cross_z > 0 means the dorsal side is.
+        A small threshold avoids flicker at perpendicular angles.
+        """
+        wx,  wy  = landmarks[0]
+        ix,  iy  = landmarks[5]    # index MCP
+        px,  py  = landmarks[17]   # pinky MCP
+        v1 = (ix - wx, iy - wy)
+        v2 = (px - wx, py - wy)
+        cross_z = v1[0] * v2[1] - v1[1] * v2[0]
+        mag = ((v1[0]**2 + v1[1]**2) * (v2[0]**2 + v2[1]**2)) ** 0.5
+        if mag < 1e-6:
+            return False
+        return (cross_z / mag) < -0.1   # normalised; threshold avoids edge flicker
+
     def get_hand_size(self, landmarks):
         wrist   = np.array(landmarks[0])
         mid_mcp = np.array(landmarks[9])

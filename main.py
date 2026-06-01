@@ -93,6 +93,10 @@ def main():
 
         _, hand_list = detector.find_hands(frame)
 
+        # Keep only hands where the palm side faces the camera
+        hand_list = [lm for lm in hand_list
+                     if detector.is_palm_facing_camera(lm)]
+
         # Sort left-to-right for stable per-frame indexing
         hand_list.sort(key=lambda lm: detector.get_palm_center(lm)[0])
 
