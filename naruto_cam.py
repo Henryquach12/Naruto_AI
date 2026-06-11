@@ -146,3 +146,94 @@ def overlay_rgba(frame, rgba, x, y, width):
     alpha = crop[:, :, 3:4].astype(np.float32) / 255.0
     roi[:] = (crop[:, :, :3].astype(np.float32) * alpha
               + roi.astype(np.float32) * (1.0 - alpha)).astype(np.uint8)
+
+
+# ── procedural fallback art (used when no PNG assets exist) ──────────────────
+BLONDE      = (60, 215, 255)    # Naruto's spiky hair
+BLONDE_DARK = (20, 165, 230)
+STEEL       = (150, 150, 150)   # headband plate
+STEEL_DARK  = (90, 90, 90)
+CLOTH_BLUE  = (110, 60, 20)     # headband cloth
+
+
+def draw_spiky_hair(frame, face):
+    """Yellow filled triangles fanning out above the face bounding box."""
+    x, y, w, h = face
+    base_y = y + int(h * 0.18)              # spikes root just above eyebrows
+    n = 8
+    for i in range(n):
+        sx0 = x - int(w * 0.15) + int((w * 1.30) * i / n)
+        sx1 = sx0 + int(w * 1.30 / n)
+        tip_x = (sx0 + sx1) // 2 + int(w * 0.10 * math.sin(i * 2.1))
+        tip_y = base_y - int(h * (0.55 + 0.25 * math.sin(i * 1.7 + 0.6)))
+        pts = np.array([[sx0, base_y], [sx1, base_y], [tip_x, tip_y]], np.int32)
+        cv2.fillPoly(frame, [pts], BLONDE, cv2.LINE_AA)
+        cv2.polylines(frame, [pts], True, BLONDE_DARK, 1, cv2.LINE_AA)
+    # side spikes hugging the temples
+    for side in (-1, 1):
+        bx = x + (w if side > 0 else 0)
+        pts = np.array([[bx, base_y - int(h * 0.05)],
+                        [bx, base_y + int(h * 0.30)],
+                        [bx + side * int(w * 0.28), base_y + int(h * 0.05)]], np.int32)
+        cv2.fillPoly(frame, [pts], BLONDE, cv2.LINE_AA)
+
+
+def draw_headband(frame, face):
+    """Grey plate with the Konoha leaf symbol on a dark-blue cloth band."""
+    x, y, w, h = face
+    band_y0 = y + int(h * 0.16)
+    band_y1 = y + int(h * 0.34)
+    cv2.rectangle(frame, (x - int(w * 0.12), band_y0),
+                  (x + w + int(w * 0.12), band_y1), CLOTH_BLUE, -1)
+    # metal plate
+    px0 = x + int(w * 0.26)
+    px1 = x + int(w * 0.74)
+    cv2.rectangle(frame, (px0, band_y0 + 2), (px1, band_y1 - 2), STEEL, -1)
+    cv2.rectangle(frame, (px0, band_y0 + 2), (px1, band_y1 - 2), STEEL_DARK, 1)
+    # leaf symbol: spiral ellipse + a swoosh line
+    cx = (px0 + px1) // 2
+    cy = (band_y0 + band_y1) // 2
+    r = max(3, (band_y1 - band_y0) // 3)
+    cv2.ellipse(frame, (cx, cy), (r, r), 0, -30, 300, STEEL_DARK, 2, cv2.LINE_AA)
+    cv2.line(frame, (cx + r, cy - r // 2), (cx + int(r * 2.2), cy - r),
+             STEEL_DARK, 2, cv2.LINE_AA)
+    # plate rivets
+    for rx in (px0 + 5, px1 - 5):
+        cv2.circle(frame, (rx, cy), 2, STEEL_DARK, -1, cv2.LINE_AA)
+
+
+def draw_outfit(frame, face):
+    """Orange jacket hint over the torso, estimated from face geometry."""
+    x, y, w, h = face
+    fh, fw = frame.shape[:2]
+    chin_y = y + int(h * 1.05)
+    torso_w = int(w * 2.8)
+    cx = x + w // 2
+    tx0 = max(0, cx - torso_w // 2)
+    tx1 = min(fw, cx + torso_w // 2)
+    ty1 = min(fh, chin_y + int(h * 2.6))
+    if chin_y >= fh or tx0 >= tx1:
+        return
+    cv2.rectangle(frame, (tx0, chin_y), (tx1, ty1), ORANGE, -1)
+    # collar — two dark flaps meeting at a centre zipper
+    collar_h = int(h * 0.45)
+    for side in (-1, 1):
+        pts = np.array([[cx, chin_y],
+                        [cx + side * int(w * 0.85), chin_y],
+                        [cx, min(fh, chin_y + collar_h)]], np.int32)
+        cv2.fillPoly(frame, [pts], (20, 60, 200), cv2.LINE_AA)
+    cv2.line(frame, (cx, chin_y), (cx, ty1), (30, 70, 190), 3, cv2.LINE_AA)
+    # shoulder stripes
+    cv2.line(frame, (tx0, chin_y + collar_h), (tx0 + int(w * 0.5), chin_y),
+             (255, 255, 255), 2, cv2.LINE_AA)
+    cv2.line(frame, (tx1, chin_y + collar_h), (tx1 - int(w * 0.5), chin_y),
+             (255, 255, 255), 2, cv2.LINE_AA)
+
+
+def draw_flame_icon(frame, x, y, size):
+    """Tiny procedural flame (cv2.putText cannot render the fire emoji)."""
+    pts = np.array([[x, y], [x - size // 2, y - size // 2], [x - size // 4, y - size],
+                    [x, y - size // 2], [x + size // 4, y - int(size * 1.2)],
+                    [x + size // 2, y - size // 3], [x + size // 3, y]], np.int32)
+    cv2.fillPoly(frame, [pts], (0, 140, 255), cv2.LINE_AA)
+    cv2.circle(frame, (x, y - size // 3), size // 4, (60, 230, 255), -1, cv2.LINE_AA)
