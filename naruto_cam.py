@@ -61,10 +61,11 @@ def ensure_model(model):
 
 # ── detector setup ───────────────────────────────────────────────────────────
 def create_hand_detector():
-    """Lightweight hand landmarker (lite model, IMAGE mode)."""
+    """Lightweight hand landmarker. VIDEO mode tracks the hand between
+    frames, so the expensive palm detector only runs when tracking is lost."""
     options = mp.tasks.vision.HandLandmarkerOptions(
         base_options=mp.tasks.BaseOptions(model_asset_path=ensure_model(HAND_MODEL)),
-        running_mode=mp.tasks.vision.RunningMode.IMAGE,
+        running_mode=mp.tasks.vision.RunningMode.VIDEO,
         num_hands=MAX_HANDS,
         min_hand_detection_confidence=0.5,
         min_hand_presence_confidence=0.5,
@@ -83,11 +84,16 @@ def create_face_detector():
     return mp.tasks.vision.FaceDetector.create_from_options(options)
 
 
+_hand_ts_ms = 0
+
+
 def detect_hands(detector, infer_rgb, disp_w, disp_h):
     """Run hand inference on the downscaled RGB copy; return landmark lists
     scaled up to display coordinates."""
+    global _hand_ts_ms
+    _hand_ts_ms += 33                   # VIDEO mode needs increasing timestamps
     mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=infer_rgb)
-    results = detector.detect(mp_image)
+    results = detector.detect_for_video(mp_image, _hand_ts_ms)
     hands = []
     if results.hand_landmarks:
         for lms in results.hand_landmarks:
@@ -269,32 +275,38 @@ class Rasengan:
             return
         lx, ly = cx - x0, cy - y0          # centre in ROI coords
         roi = frame[y0:y1, x0:x1]
+        rh, rw = roi.shape[:2]
 
-        # paint the energy shapes on a black canvas, blur it, add it
-        glow = np.zeros_like(roi)
-        cv2.circle(glow, (lx, ly), int(r * 1.45), self.DEEP_BLUE, -1, cv2.LINE_AA)
-        cv2.circle(glow, (lx, ly), int(r * 1.05), self.BLUE, -1, cv2.LINE_AA)
-        cv2.circle(glow, (lx, ly), int(r * 0.65), self.LIGHT_BLUE, -1, cv2.LINE_AA)
-        cv2.circle(glow, (lx, ly), int(r * 0.32), self.WHITE, -1, cv2.LINE_AA)
+        # paint the energy shapes at QUARTER resolution — Gaussian blur cost
+        # scales with kernel size, so blurring small and upscaling is ~16x
+        # cheaper and looks identical for a soft glow
+        s = 4
+        glow = np.zeros((max(rh // s, 2), max(rw // s, 2), 3), np.uint8)
+        gx, gy, gr = lx // s, ly // s, max(r // s, 2)
+        cv2.circle(glow, (gx, gy), int(gr * 1.45), self.DEEP_BLUE, -1, cv2.LINE_AA)
+        cv2.circle(glow, (gx, gy), int(gr * 1.05), self.BLUE, -1, cv2.LINE_AA)
+        cv2.circle(glow, (gx, gy), int(gr * 0.65), self.LIGHT_BLUE, -1, cv2.LINE_AA)
+        cv2.circle(glow, (gx, gy), int(gr * 0.32), self.WHITE, -1, cv2.LINE_AA)
 
-        # spinning lines — three chord families rotating at different speeds
+        # layered glow: tight blur + wide blur, additively blended
+        tight = cv2.GaussianBlur(glow, (0, 0), max(gr * 0.18, 1))
+        wide = cv2.GaussianBlur(glow, (0, 0), max(gr * 0.55, 1))
+        halo = cv2.addWeighted(tight, 0.9, wide, 0.7, 0)
+        halo = cv2.resize(halo, (rw, rh), interpolation=cv2.INTER_LINEAR)
+        roi[:] = cv2.add(roi, halo)        # additive: light only brightens
+
+        # spinning lines at full res — chords + tilted orbit rings
         for k in range(6):
             a = self.tick * 0.18 + k * math.pi / 3
             x_a = lx + int(r * 0.95 * math.cos(a))
             y_a = ly + int(r * 0.95 * math.sin(a))
             x_b = lx + int(r * 0.95 * math.cos(a + 2.4))
             y_b = ly + int(r * 0.95 * math.sin(a + 2.4))
-            cv2.line(glow, (x_a, y_a), (x_b, y_b), self.WHITE, 1, cv2.LINE_AA)
+            cv2.line(roi, (x_a, y_a), (x_b, y_b), self.WHITE, 1, cv2.LINE_AA)
         for k in range(4):
             a = -self.tick * 0.11 + k * math.pi / 2
-            cv2.ellipse(glow, (lx, ly), (int(r * 1.0), int(r * 0.35)),
+            cv2.ellipse(roi, (lx, ly), (int(r * 1.0), int(r * 0.35)),
                         math.degrees(a), 0, 360, self.LIGHT_BLUE, 1, cv2.LINE_AA)
-
-        # layered glow: tight blur + wide blur, additively blended
-        tight = cv2.GaussianBlur(glow, (0, 0), r * 0.18)
-        wide = cv2.GaussianBlur(glow, (0, 0), r * 0.55)
-        halo = cv2.addWeighted(tight, 0.9, wide, 0.7, 0)
-        roi[:] = cv2.add(roi, halo)        # additive: light only brightens
 
         # crisp core on top of the glow
         cv2.circle(roi, (lx, ly), int(r * 0.30), self.WHITE, -1, cv2.LINE_AA)
