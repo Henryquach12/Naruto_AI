@@ -237,3 +237,67 @@ def draw_flame_icon(frame, x, y, size):
                     [x + size // 2, y - size // 3], [x + size // 3, y]], np.int32)
     cv2.fillPoly(frame, [pts], (0, 140, 255), cv2.LINE_AA)
     cv2.circle(frame, (x, y - size // 3), size // 4, (60, 230, 255), -1, cv2.LINE_AA)
+
+
+# ── Rasengan ─────────────────────────────────────────────────────────────────
+class Rasengan:
+    """Glowing blue/white energy sphere with a spinning-line animation.
+
+    The glow is built on a small ROI around the palm only — two GaussianBlur
+    passes additively blended — so the cost stays constant regardless of
+    frame size."""
+
+    DEEP_BLUE  = (220,  90,  10)
+    BLUE       = (255, 160,  40)
+    LIGHT_BLUE = (255, 220, 160)
+    WHITE      = (255, 255, 255)
+
+    def __init__(self):
+        self.tick = 0
+
+    def draw(self, frame, center, radius):
+        self.tick += 1
+        cx, cy = int(center[0]), int(center[1])
+        r = max(12, int(radius))
+        fh, fw = frame.shape[:2]
+
+        # ROI big enough to hold the glow halo
+        pad = int(r * 2.2)
+        x0, y0 = max(cx - pad, 0), max(cy - pad, 0)
+        x1, y1 = min(cx + pad, fw), min(cy + pad, fh)
+        if x1 - x0 < 4 or y1 - y0 < 4:
+            return
+        lx, ly = cx - x0, cy - y0          # centre in ROI coords
+        roi = frame[y0:y1, x0:x1]
+
+        # paint the energy shapes on a black canvas, blur it, add it
+        glow = np.zeros_like(roi)
+        cv2.circle(glow, (lx, ly), int(r * 1.45), self.DEEP_BLUE, -1, cv2.LINE_AA)
+        cv2.circle(glow, (lx, ly), int(r * 1.05), self.BLUE, -1, cv2.LINE_AA)
+        cv2.circle(glow, (lx, ly), int(r * 0.65), self.LIGHT_BLUE, -1, cv2.LINE_AA)
+        cv2.circle(glow, (lx, ly), int(r * 0.32), self.WHITE, -1, cv2.LINE_AA)
+
+        # spinning lines — three chord families rotating at different speeds
+        for k in range(6):
+            a = self.tick * 0.18 + k * math.pi / 3
+            x_a = lx + int(r * 0.95 * math.cos(a))
+            y_a = ly + int(r * 0.95 * math.sin(a))
+            x_b = lx + int(r * 0.95 * math.cos(a + 2.4))
+            y_b = ly + int(r * 0.95 * math.sin(a + 2.4))
+            cv2.line(glow, (x_a, y_a), (x_b, y_b), self.WHITE, 1, cv2.LINE_AA)
+        for k in range(4):
+            a = -self.tick * 0.11 + k * math.pi / 2
+            cv2.ellipse(glow, (lx, ly), (int(r * 1.0), int(r * 0.35)),
+                        math.degrees(a), 0, 360, self.LIGHT_BLUE, 1, cv2.LINE_AA)
+
+        # layered glow: tight blur + wide blur, additively blended
+        tight = cv2.GaussianBlur(glow, (0, 0), r * 0.18)
+        wide = cv2.GaussianBlur(glow, (0, 0), r * 0.55)
+        halo = cv2.addWeighted(tight, 0.9, wide, 0.7, 0)
+        roi[:] = cv2.add(roi, halo)        # additive: light only brightens
+
+        # crisp core on top of the glow
+        cv2.circle(roi, (lx, ly), int(r * 0.30), self.WHITE, -1, cv2.LINE_AA)
+        cv2.circle(roi, (lx, ly), r, self.LIGHT_BLUE, 2, cv2.LINE_AA)
+        pulse = int(r * (1.10 + 0.06 * math.sin(self.tick * 0.25)))
+        cv2.circle(roi, (lx, ly), pulse, self.BLUE, 1, cv2.LINE_AA)
