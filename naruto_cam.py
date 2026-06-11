@@ -57,3 +57,55 @@ def ensure_model(model):
         urllib.request.urlretrieve(model["url"], model["path"])
         print("Model ready.")
     return model["path"]
+
+
+# ── detector setup ───────────────────────────────────────────────────────────
+def create_hand_detector():
+    """Lightweight hand landmarker (lite model, IMAGE mode)."""
+    options = mp.tasks.vision.HandLandmarkerOptions(
+        base_options=mp.tasks.BaseOptions(model_asset_path=ensure_model(HAND_MODEL)),
+        running_mode=mp.tasks.vision.RunningMode.IMAGE,
+        num_hands=MAX_HANDS,
+        min_hand_detection_confidence=0.5,
+        min_hand_presence_confidence=0.5,
+        min_tracking_confidence=0.5,
+    )
+    return mp.tasks.vision.HandLandmarker.create_from_options(options)
+
+
+def create_face_detector():
+    """BlazeFace short-range — the lightest face model MediaPipe ships."""
+    options = mp.tasks.vision.FaceDetectorOptions(
+        base_options=mp.tasks.BaseOptions(model_asset_path=ensure_model(FACE_MODEL)),
+        running_mode=mp.tasks.vision.RunningMode.IMAGE,
+        min_detection_confidence=0.5,
+    )
+    return mp.tasks.vision.FaceDetector.create_from_options(options)
+
+
+def detect_hands(detector, infer_rgb, disp_w, disp_h):
+    """Run hand inference on the downscaled RGB copy; return landmark lists
+    scaled up to display coordinates."""
+    mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=infer_rgb)
+    results = detector.detect(mp_image)
+    hands = []
+    if results.hand_landmarks:
+        for lms in results.hand_landmarks:
+            hands.append([(int(lm.x * disp_w), int(lm.y * disp_h)) for lm in lms])
+    return hands
+
+
+def detect_face(detector, infer_rgb, disp_w, disp_h):
+    """Run face inference on the downscaled RGB copy; return the largest face
+    bounding box (x, y, w, h) in display coordinates, or None."""
+    mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=infer_rgb)
+    results = detector.detect(mp_image)
+    if not results.detections:
+        return None
+    sx = disp_w / infer_rgb.shape[1]
+    sy = disp_h / infer_rgb.shape[0]
+    best = max(results.detections,
+               key=lambda d: d.bounding_box.width * d.bounding_box.height)
+    bb = best.bounding_box
+    return (int(bb.origin_x * sx), int(bb.origin_y * sy),
+            int(bb.width * sx), int(bb.height * sy))
