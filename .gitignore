@@ -1,4 +1,5 @@
 hand_landmarker.task
+blaze_face_short_range.tflite
 __pycache__/
 *.pyc
 *.pyo
