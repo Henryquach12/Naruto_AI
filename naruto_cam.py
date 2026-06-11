@@ -301,3 +301,46 @@ class Rasengan:
         cv2.circle(roi, (lx, ly), r, self.LIGHT_BLUE, 2, cv2.LINE_AA)
         pulse = int(r * (1.10 + 0.06 * math.sin(self.tick * 0.25)))
         cv2.circle(roi, (lx, ly), pulse, self.BLUE, 1, cv2.LINE_AA)
+
+
+# ── hand geometry ────────────────────────────────────────────────────────────
+PALM_IDS = (0, 5, 9, 13, 17)        # wrist + finger MCP knuckles
+
+
+def palm_center(landmarks):
+    xs = sum(landmarks[i][0] for i in PALM_IDS) // len(PALM_IDS)
+    ys = sum(landmarks[i][1] for i in PALM_IDS) // len(PALM_IDS)
+    return xs, ys
+
+
+def hand_size(landmarks):
+    """Wrist-to-middle-knuckle distance — scales the Rasengan with depth."""
+    dx = landmarks[9][0] - landmarks[0][0]
+    dy = landmarks[9][1] - landmarks[0][1]
+    return math.hypot(dx, dy)
+
+
+def is_hand_raised(landmarks, frame_h):
+    """Wrist landmark above RAISE_THRESHOLD of the frame height."""
+    return landmarks[0][1] < frame_h * RAISE_THRESHOLD
+
+
+# ── HUD ──────────────────────────────────────────────────────────────────────
+def draw_idle_label(frame):
+    cv2.putText(frame, "RAISE HAND TO TRANSFORM", (14, frame.shape[0] - 16),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (200, 200, 200), 1, cv2.LINE_AA)
+
+
+def draw_naruto_label(frame):
+    text = "NARUTO MODE"
+    cv2.putText(frame, text, (14, frame.shape[0] - 16),
+                cv2.FONT_HERSHEY_DUPLEX, 0.9, (0, 0, 0), 4, cv2.LINE_AA)
+    cv2.putText(frame, text, (14, frame.shape[0] - 16),
+                cv2.FONT_HERSHEY_DUPLEX, 0.9, ORANGE, 2, cv2.LINE_AA)
+    (tw, _), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_DUPLEX, 0.9, 2)
+    draw_flame_icon(frame, 14 + tw + 18, frame.shape[0] - 18, 16)
+
+
+def draw_fps(frame, fps):
+    cv2.putText(frame, f"FPS {fps:5.1f}", (frame.shape[1] - 110, 26),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 230, 180), 2, cv2.LINE_AA)
