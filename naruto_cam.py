@@ -344,3 +344,113 @@ def draw_naruto_label(frame):
 def draw_fps(frame, fps):
     cv2.putText(frame, f"FPS {fps:5.1f}", (frame.shape[1] - 110, 26),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 230, 180), 2, cv2.LINE_AA)
+
+
+# ── main loop ────────────────────────────────────────────────────────────────
+def apply_transformation(frame, face, assets):
+    """Overlay jacket → hair → headband (back to front). PNG assets when
+    available, procedural art otherwise."""
+    x, y, w, h = face
+    cx = x + w // 2
+    if "jacket" in assets:
+        overlay_rgba(frame, assets["jacket"], cx, y + int(h * 1.0), int(w * 3.0))
+    else:
+        draw_outfit(frame, face)
+    if "hair" in assets:
+        overlay_rgba(frame, assets["hair"], cx, y - int(h * 0.75), int(w * 1.6))
+    else:
+        draw_spiky_hair(frame, face)
+    if "headband" in assets:
+        overlay_rgba(frame, assets["headband"], cx, y + int(h * 0.14), int(w * 1.2))
+    else:
+        draw_headband(frame, face)
+
+
+def main():
+    cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)
+    if not cap.isOpened():
+        cap = cv2.VideoCapture(0)
+    if not cap.isOpened():
+        print("ERROR: cannot open webcam.")
+        return
+    cap.set(cv2.CAP_PROP_FRAME_WIDTH, DISPLAY_W)
+    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, DISPLAY_H)
+    cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)          # never queue stale frames
+    cap.set(cv2.CAP_PROP_FPS, 60)
+
+    hand_detector = create_hand_detector()
+    face_detector = create_face_detector()
+    assets = load_assets()
+    if assets:
+        print(f"Loaded PNG assets: {', '.join(sorted(assets))}")
+    else:
+        print("No PNG assets found in ./assets — using procedural Naruto art.")
+
+    rasengans = [Rasengan() for _ in range(MAX_HANDS)]
+    cached_face = None
+    frame_n = 0
+    fps = 0.0
+    tick_freq = cv2.getTickFrequency()
+    last_tick = cv2.getTickCount()
+
+    cv2.namedWindow(WINDOW_TITLE, cv2.WINDOW_NORMAL)
+    cv2.resizeWindow(WINDOW_TITLE, DISPLAY_W * 2, DISPLAY_H * 2)
+
+    while True:
+        ok, frame = cap.read()
+        if not ok:
+            break
+        frame_n += 1
+
+        # clamp processing resolution to 640x480
+        if frame.shape[1] > DISPLAY_W or frame.shape[0] > DISPLAY_H:
+            frame = cv2.resize(frame, (DISPLAY_W, DISPLAY_H),
+                               interpolation=cv2.INTER_AREA)
+        frame = cv2.flip(frame, 1)
+        h, w = frame.shape[:2]
+
+        # one downscaled RGB copy feeds BOTH detectors
+        infer_rgb = cv2.cvtColor(
+            cv2.resize(frame, (INFER_W, INFER_H), interpolation=cv2.INTER_AREA),
+            cv2.COLOR_BGR2RGB)
+
+        # hands every frame
+        hands = detect_hands(hand_detector, infer_rgb, w, h)
+        raised = [lm for lm in hands if is_hand_raised(lm, h)]
+
+        # face every other frame, cached in between
+        if frame_n % FACE_SKIP == 0 or cached_face is None:
+            face = detect_face(face_detector, infer_rgb, w, h)
+            if face is not None:
+                cached_face = face
+
+        transformed = bool(raised)
+        if transformed:
+            if cached_face is not None:
+                apply_transformation(frame, cached_face, assets)
+            for i, lm in enumerate(raised[:MAX_HANDS]):
+                radius = max(28, int(hand_size(lm) * 0.60))
+                rasengans[i].draw(frame, palm_center(lm), radius)
+            draw_naruto_label(frame)
+        else:
+            draw_idle_label(frame)
+
+        # FPS via tick counter (no sleeps anywhere in this loop)
+        now = cv2.getTickCount()
+        inst = tick_freq / max(now - last_tick, 1)
+        last_tick = now
+        fps = inst if fps == 0.0 else fps * 0.9 + inst * 0.1
+        draw_fps(frame, fps)
+
+        cv2.imshow(WINDOW_TITLE, frame)
+        key = cv2.waitKey(1) & 0xFF
+        window_open = cv2.getWindowProperty(WINDOW_TITLE, cv2.WND_PROP_VISIBLE) >= 1
+        if key in (ord("q"), ord("Q"), 27) or not window_open:
+            break
+
+    cap.release()
+    cv2.destroyAllWindows()
+
+
+if __name__ == "__main__":
+    main()
