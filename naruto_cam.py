@@ -109,3 +109,40 @@ def detect_face(detector, infer_rgb, disp_w, disp_h):
     bb = best.bounding_box
     return (int(bb.origin_x * sx), int(bb.origin_y * sy),
             int(bb.width * sx), int(bb.height * sy))
+
+
+# ── PNG assets (optional — procedural fallback used when missing) ────────────
+def load_assets():
+    """Load RGBA overlay PNGs from ./assets if present.
+    Expected files: hair.png, headband.png, jacket.png."""
+    assets = {}
+    for name in ("hair", "headband", "jacket"):
+        path = os.path.join(ASSET_DIR, f"{name}.png")
+        if os.path.exists(path):
+            img = cv2.imread(path, cv2.IMREAD_UNCHANGED)
+            if img is not None and img.ndim == 3 and img.shape[2] == 4:
+                assets[name] = img
+    return assets
+
+
+def overlay_rgba(frame, rgba, x, y, width):
+    """Alpha-blend an RGBA image onto frame, resized to `width` px wide and
+    centred horizontally at x, with its top edge at y. Clips at frame edges."""
+    fh, fw = frame.shape[:2]
+    scale = width / rgba.shape[1]
+    height = max(1, int(rgba.shape[0] * scale))
+    rgba = cv2.resize(rgba, (width, height), interpolation=cv2.INTER_LINEAR)
+
+    x0 = x - width // 2
+    y0 = y
+    x1, y1 = x0 + width, y0 + height
+    cx0, cy0 = max(x0, 0), max(y0, 0)
+    cx1, cy1 = min(x1, fw), min(y1, fh)
+    if cx0 >= cx1 or cy0 >= cy1:
+        return
+
+    crop = rgba[cy0 - y0:cy1 - y0, cx0 - x0:cx1 - x0]
+    roi = frame[cy0:cy1, cx0:cx1]
+    alpha = crop[:, :, 3:4].astype(np.float32) / 255.0
+    roi[:] = (crop[:, :, :3].astype(np.float32) * alpha
+              + roi.astype(np.float32) * (1.0 - alpha)).astype(np.uint8)
